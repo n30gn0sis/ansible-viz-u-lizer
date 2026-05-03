@@ -1,0 +1,68 @@
+- name: Configure web servers
+  hosts: web
+  become: true
+  vars:
+    app_user: deploy
+    packages:
+      - nginx
+      - git
+  roles:
+    - common
+    - nginx
+  tasks:
+    - name: Install base packages
+      ansible.builtin.package:
+        name: "{{ packages }}"
+        state: present
+      loop: "{{ packages }}"
+      tags: [setup, packages]
+      notify: Restart nginx
+
+    - name: Render nginx config
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+      when: ansible_os_family == "Debian"
+      tags: [config]
+      notify:
+        - Restart nginx
+        - Reload systemd
+
+  handlers:
+    - name: Restart nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+      tags: [handlers]
+
+    - name: Reload systemd
+      ansible.builtin.command: systemctl daemon-reload
+
+- name: Deploy application
+  hosts: app
+  vars:
+    release_dir: /srv/myapp/releases
+  roles:
+    - app_runtime
+  tasks:
+    - name: Sync artifact
+      ansible.builtin.copy:
+        src: ./build/app.tar.gz
+        dest: "{{ release_dir }}/app.tar.gz"
+      tags: [deploy]
+
+    - name: Extract artifact
+      ansible.builtin.unarchive:
+        src: "{{ release_dir }}/app.tar.gz"
+        dest: "{{ release_dir }}"
+        remote_src: true
+      when: release_dir is defined
+      tags: [deploy]
+      notify: Restart app
+
+  handlers:
+    - name: Restart app
+      ansible.builtin.service:
+        name: myapp
+        state: restarted
+      tags: [handlers, deploy]
